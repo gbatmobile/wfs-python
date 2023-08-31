@@ -429,6 +429,7 @@ class DiskSelection(wx.Frame):
 
     def onSelect(self, event):
         self.Close()
+        print ("FIle:", self.combo.GetValue())
         self.Janela.carrega_imagem(self.combo.GetValue())
 
 if __name__ == '__main__':
