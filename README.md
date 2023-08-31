@@ -1,4 +1,4 @@
-#[wfs-python]
+# wfs-python
 
 This is a tool for recover videos from a WFS0.4/5. WFS is a file system popular in chinese DVRs and we don´t know any tool public available to extract videos from this file system.
 
