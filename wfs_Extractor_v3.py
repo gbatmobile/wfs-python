@@ -10,7 +10,7 @@ copyright = \
     you can access evidence disk or image using names in file system.\n\
     Be careful when using disk directly (this may not be a correct \n\
     forensic approach in many situations!!!). \n\n\
-	WFS0.4 extractor is offered to you under GPL license by:\n\n\
+	WFS0.4 extractor is offered to you under MIT license by:\n\n\
           UNALDO Brito (unaldo.brito@gmail.com)\n\
           GALILEU Batista (galileu.batista@ifrn.edu.br)\n\n\
     You must retain the authors names in all\n\
