@@ -1,12 +1,11 @@
 # encoding: utf-8
 
-version = "WFS0.4/5 Extractor 0.3"
+version = "WFS0.4/5 Extractor 0.4"
 copyright = \
 '''
     \nThis program can identify and recover videos stored\n\
 	in a WFS0.4/5 filesystem (common in chinese's DVR). \n\n\
-    When running under Windows, you must run as administrator \n\
-    and use 'Open Disk' or 'Open Image' to get data source. In Linux\n\
+    Under Windows, you can only open dd images. In Linux\n\
     you can access evidence disk or image using names in file system.\n\
     Be careful when using disk directly (this may not be a correct \n\
     forensic approach in many situations!!!). \n\n\
@@ -20,13 +19,8 @@ copyright = \
     is provided.
 '''
 
-# Howto create a Virtualbox to access windows physical disk on Linux Box
-# VBoxManage internalcommands createrawvmdk -filename
-#            "C:\tmp\wfs.vmdk" -rawdisk \\.\PhysicalDrive2
-
 import wx
-import os
-import platform
+import os, sys, platform
 import time
 
 def extract_bits(numb, position, tam):
@@ -50,6 +44,15 @@ class Janela(wx.Frame):
 
         self.gui()
 
+    def resource_path(self, relative_path):
+        """ Get absolute path to resource, works for dev and for PyInstaller """
+        try:
+            # PyInstaller creates a temp folder and stores path in _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+
     def gui(self):
         self.CreateStatusBar()
 
@@ -62,16 +65,17 @@ class Janela(wx.Frame):
         # ToolBar
         self.tb = wx.ToolBar(self, wx.ID_ANY, style=wx.TB_TEXT)
         self.ToolBar = self.tb
-        self.tb.AddTool(toolId=101, label="Open Image", bitmap=wx.Bitmap("icons/abrir.png"))
-        if os.name == 'nt':
-            self.tb.AddTool(toolId=110, label="Open Disk", bitmap=wx.Bitmap("icons/abrir.png"))
-        self.tb.AddTool(toolId=102, label="Info", bitmap=wx.Bitmap("icons/info.png"))
-        self.tb.AddTool(toolId=103, label="Extract", bitmap=wx.Bitmap("icons/baixar.png"))
-        self.tb.AddTool(toolId=104, label="About", bitmap=wx.Bitmap("icons/info.png"))
-        self.tb.AddTool(toolId=105, label="Exit", bitmap=wx.Bitmap("icons/sair.png"))
+        self.tb.AddTool(toolId=101, label="Open Image", bitmap=wx.Bitmap(self.resource_path("icons/open.png")))
+        if os.name != 'nt':
+            self.tb.AddTool(toolId=102, label="Open Disk", bitmap=wx.Bitmap(self.resource_path("icons/open.png")))
+        self.tb.AddTool(toolId=103, label="Info", bitmap=wx.Bitmap(self.resource_path("icons/info.png")))
+        self.tb.AddTool(toolId=104, label="Extract", bitmap=wx.Bitmap(self.resource_path("icons/extract.png")))
+        self.tb.AddTool(toolId=105, label="Recover", bitmap=wx.Bitmap(self.resource_path("icons/recover.png")))
+        self.tb.AddTool(toolId=106, label="Slack", bitmap=wx.Bitmap(self.resource_path("icons/slack.png")))
+        self.tb.AddTool(toolId=107, label="About", bitmap=wx.Bitmap(self.resource_path("icons/info.png")))
+        self.tb.AddTool(toolId=108, label="Exit", bitmap=wx.Bitmap(self.resource_path("icons/exit.png")))
         self.tb.Bind(wx.EVT_TOOL, self.toolBarEvent)
         self.tb.Realize()
-
         self.SetTitle(version)
         self.Centre()
 
@@ -82,15 +86,19 @@ class Janela(wx.Frame):
     def toolBarEvent(self, e):
         if e.GetId() == 101:
             self.abrir_dialogo()
-        if e.GetId() == 110:
+        if e.GetId() == 102:
             self.abrir_comboDisk()
-        elif e.GetId() == 102:
-            self.dlg_metadados()
         elif e.GetId() == 103:
-            self.recupera_videos()
+            self.dlg_metadados()
         elif e.GetId() == 104:
-            self.dlg_about()
+            self.recupera_videos()
         elif e.GetId() == 105:
+            self.recupera_apagados()
+        elif e.GetId() == 106:
+            self.recupera_slack()
+        elif e.GetId() == 107:
+            self.dlg_about()
+        elif e.GetId() == 108:
             self.sair()
 
     def decodeBlockStructure(self, descBytes): # Retorna um dicionário com os atributos de cada fragmento
@@ -110,13 +118,13 @@ class Janela(wx.Frame):
             'camera'       : (int.from_bytes(descBytes[31:32], byteorder='little') + 2) // 4,
             'tamUltFrag'   : int.from_bytes(descBytes[22:24], byteorder='little') * self.bloco
         }
-        print (f"beginblock: {dic['beginBlock']} -> {dic['begTimeStamp']} cam{dic['camera']}")
+        # print (f"beginblock: {dic['beginBlock']} -> {dic['begTimeStamp']} cam{dic['camera']}")
 
         return dic
 
     def abrir_dialogo(self):
         #wildcard = "Text Files (*.img)|*.img"
-        self.dlg = wx.FileDialog(self, "Escolha um arquivo", os.getcwd(), "")
+        self.dlg = wx.FileDialog(self, "Choose a file...", os.getcwd(), "")
         if self.dlg.ShowModal() == wx.ID_OK:
             self.carrega_imagem(self.dlg.GetPath())
 
@@ -126,20 +134,31 @@ class Janela(wx.Frame):
     def carrega_imagem(self, path):
 
         self.disco = open(path, "rb")
-#        self.disco = open(os.open("\\\\.\\PhysicalDrive2", os.O_RDONLY|os.O_BINARY), "rb")
 
         # Verifica e confirma se trata-se de um Sistema de Arquivos WFS0.4 e libera as funções do programa
         if self.disco.read(6) in [b'WFS0.4', b'WFS0.5']:
             self.camera = 0
+
+            self.disco.seek(0x3010)
+            b_ano, b_mes, b_dia, b_hora, b_min, b_seg = decodeTimeStamp(int.from_bytes(self.disco.read(4), byteorder='little'))
+            self.firstDate = "20{0:02d}-{1:02d}-{2:02d} {3:02d}:{4:02d}:{5:02d}".format(b_ano, b_mes, b_dia, b_hora, b_min, b_seg)
+            print ("First fragmento: ",  self.firstDate)
+            e_ano, e_mes, e_dia, e_hora, e_min, e_seg = decodeTimeStamp(int.from_bytes(self.disco.read(4), byteorder='little'))
+
             self.disco.seek(0x302c)
             self.bloco = int.from_bytes(self.disco.read(4), byteorder='little')  # Tamanho do bloco
+            print ("Block Size ",  self.bloco)
             self.fragmento = int.from_bytes(self.disco.read(4),byteorder='little') * self.bloco  # Tamanho do fragmento de video
+            print ("Fragment size ",  self.fragmento)
             self.disco.seek(0x3038)
             self.qtd_reservados = (int.from_bytes(self.disco.read(4), byteorder='little'))
             self.disco.seek(0x3044)
             self.inicio_descritores = (int.from_bytes(self.disco.read(4), byteorder='little')) * self.bloco
+            print ("Start of descriptors: ",  self.inicio_descritores)
             self.inicio_videos = (int.from_bytes(self.disco.read(4), byteorder='little')) * self.bloco
+            print ("Start of videos: ",  self.inicio_videos)
             self.qtd_frag = (int.from_bytes(self.disco.read(4), byteorder='little'))
+            print ("Number of fragments: ",  self.qtd_frag)
             self.desc_principais()
             self.listar_datas()
             self.listar_videos()
@@ -158,13 +177,20 @@ class Janela(wx.Frame):
         if self.imagem_carregada:
             self.disco.seek(3014)
 
-            mensagem = "METADADOS for the WFS0.4 filesystem\n\n" \
+            mensagem = "METADATA for the WFS0.4 filesystem\n\n" \
                        "Number of fragments: {0}\n" \
                        "Number of videos: {1}\n" \
                        "Standard fragment size: {2}\n" \
                        "Number of reserved fragment: {3}\n" \
-                       "Reserved area before data area: {4:.0f} MB".format(self.qtd_frag, len(self.lista_principais), self.fragmento,
-                                                                       self.qtd_reservados, self.qtd_reservados*self.fragmento/1048576)
+                       "Number of free fragments: {4}\n" \
+                       "Reserved area before data area: {5:.0f} MB\n" \
+                       "First vídeo timestamp (in superblock): {6}\n" \
+                       "Last vídeo timestamp (in video descriptors): {7}\n".format(self.qtd_frag, len(self.lista_principais), self.fragmento,
+                                                                       self.qtd_reservados,
+                                                                       len(self.freeFrags),
+                                                                       self.qtd_reservados*self.fragmento/1048576,
+                                                                       self.firstDate,
+                                                                       self.lastDate)
             wx.MessageBox(mensagem, "WFS0.4 Metadata", style=wx.OK)
         else:
             wx.MessageBox("No image/disk loaded!!!!!!", "Warning", style=wx.OK)
@@ -173,14 +199,20 @@ class Janela(wx.Frame):
     def desc_principais(self):
         self.SetStatusText("Loading...")
         self.lista_principais = []
+        self.freeFrags = []
         self.disco.seek(self.inicio_descritores)
+        allAtribs = {}
+
+        self.lastDate = "00"
         for i in range(self.qtd_frag):
             descritor = self.disco.read(self.desc)
             dic = self.decodeBlockStructure(descritor)
-            if (dic['attrib'] == 2 or dic['attrib'] == 3) and dic['begTimeStamp'] != dic['endTimeStamp']:
+            allAtribs[dic['attrib']] = allAtribs.get(dic['attrib'],0)+1
+            if (dic['attrib'] in [2, 3]) and (dic['begTimeStamp'] != dic['endTimeStamp']):
                 self.lista_principais.append(descritor)
-
-        print (len(self.lista_principais))
+                self.lastDate = max (self.lastDate, dic['endTimeStamp'])
+            elif dic['attrib'] == 0:
+                self.freeFrags.append(i)
         self.separados = self.lista_principais
         self.SetStatusText("Loaded!")
 
@@ -225,14 +257,12 @@ class Janela(wx.Frame):
             self.camera = 0
         else:
             self.camera = self.lb_cam.GetStringSelection()
-
         self.listar_videos()
         #print(self.camera)
 
-
     def separa_descritores(self, event):
         self.separados = []
-        if self.lb_datas.GetStringSelection() == "Todos":
+        if self.lb_datas.GetStringSelection() == "All":
             self.separados = self.lista_principais
 
         else:
@@ -279,7 +309,6 @@ class Janela(wx.Frame):
                 if dic['camera'] == int(self.camera):
                     sep.append(desc)
             descritores = sep
-
         else:
             descritores = self.separados
 
@@ -312,63 +341,137 @@ class Janela(wx.Frame):
         descritor = self.disco.read(self.desc)
         dic = self.decodeBlockStructure(descritor)
         ultimo = dic['tamUltFrag']
+        pedacos = [dic['beginBlock']]
+        nBlocks = dic['totBlocks']
 
-        if dic['totBlocks'] > 1:
-            pedacos = [dic['beginBlock'], dic['nextBlock']]
-            for i in range(dic['totBlocks']):
+        for i in range(1, nBlocks):
+                pedacos.append(dic['nextBlock'])
                 self.disco.seek(dic['nextBlock'] * self.desc + self.inicio_descritores)
                 descritor = self.disco.read(self.desc)
                 dic = self.decodeBlockStructure(descritor)
 
-                if dic['nextBlock'] > 0:
-                    pedacos.append(dic['nextBlock'])
-
-        else: # caso o vídeo possua apenas 1 fragmento, salva apenas este
-            pedacos = [dic['beginBlock']]
-
         return pedacos, ultimo
 
-    def recupera_videos(self):
-        if len(self.lista) == 0:
-            wx.MessageBox("Choose a video", version, style=wx.OK | wx.ICON_INFORMATION)
+    def canonize_path(self, path):
+        if platform.system() == 'Windows':
+            try:
+                os.mkdir(os.getcwd()+"\\"+path)
+                caminho = os.getcwd()+"\\"+path+"\\"
+            except FileExistsError:
+                caminho = os.getcwd()+"/"+path+"\\"
         else:
-            # Verifica a plataforma para formatar o caminho
-            if platform.system() == 'Windows':
-                try:
-                    os.mkdir(os.getcwd()+"\\WFS0.4_Extractor")
-                    caminho = os.getcwd()+"\\WFS0.4_Extractor\\"
-                except FileExistsError:
-                    caminho = os.getcwd()+"/WFS0.4_Extractor\\"
-            else:
-                try:
-                    os.mkdir(os.getcwd()+"/WFS0.4_Extractor")
-                    caminho = os.getcwd()+"/WFS0.4_Extractor/"
-                except FileExistsError:
-                    caminho = os.getcwd()+"/WFS0.4_Extractor/"
+            try:
+                os.mkdir(os.getcwd()+"/"+path)
+                caminho = os.getcwd()+"/"+path+"/"
+            except FileExistsError:
+                caminho = os.getcwd()+"/"+path+"/"
+        return caminho
 
+    def recupera_videos(self):
+        if not self.imagem_carregada:
+            wx.MessageBox("No image/disk loaded!!!!!!", "Warning", style=wx.OK)
+            return
 
+        if len(self.lista) > 0:
+            caminho = self.canonize_path("WFS0.4_Extractor_Videos")
+
+            nVideos = 0
             for l in range(len(self.lista)):
-                self.SetStatusText("Saving vídeo {0} in folder {1}".format(self.lista_meta[self.lista[l]], caminho))
-                nome = (self.lista_meta[self.lista[l]]+".h264").replace(":","-")
-                arq = open(caminho+nome, "wb")
                 pedacos, ultimo = self.guarda_pos(self.primeira[self.lista[l]])
-                #print(pedacos)
 
+                nome = f"Video-{pedacos[0]:06d}-{self.lista_meta[self.lista[l]]}.h264".replace(":","-")
+                self.SetStatusText("Saving vídeo {0} in folder {1}".format(nome, caminho))
+                arq = open(caminho+nome, "wb")
+
+                inicio_real = self.inicio_videos
                 for i in range(len(pedacos) - 1):
-                    desloc = self.inicio_videos + pedacos[i] * self.fragmento
+                    desloc = inicio_real + pedacos[i] * self.fragmento
                     self.disco.seek(desloc)
                     frag = self.disco.read(self.fragmento)
                     arq.write(frag)
 
-                desloc = self.inicio_videos + pedacos[-1] * self.fragmento
+                desloc = inicio_real + pedacos[-1] * self.fragmento
                 self.disco.seek(desloc)
                 frag = self.disco.read(ultimo)
                 arq.write(frag)
                 arq.close()
+                nVideos += 1
 
-            wx.MessageBox("Video(s) sucessfully saved in folder {0}".format(caminho), style=wx.OK)
+            wx.MessageBox("{0} Video(s) sucessfully saved in folder {1}".format(nVideos, caminho), style=wx.OK)
 
             self.SetStatusText("Done!!")
+        else:
+            wx.MessageBox("Choose one or more videos", version, style=wx.OK | wx.ICON_INFORMATION)
+
+    def recupera_apagados(self):
+        if self.imagem_carregada:
+            wx.MessageBox("This is a experimental feature. It will work in ONE camera system only!!",
+                            version, style=wx.OK | wx.ICON_INFORMATION)
+
+            caminho = self.canonize_path("WFS0.4_Extractor_Recovered")
+            fragHeader = b'\x00\x00\x00\x00'
+
+            nVideos = 0
+            arq = None
+            for i in self.freeFrags:
+                desloc = self.inicio_videos + i * self.fragmento
+                self.disco.seek(desloc)
+                frag = self.disco.read(self.fragmento)
+
+                if frag[0:4] == h264Signature:
+                    if arq:
+                        nVideos += 1
+                        arq.close()
+
+                    nome = f"Frag-{i:06d}.h264"
+                    arq = open(caminho+nome, "wb")
+                    arq.write(frag)
+                    self.SetStatusText("Saving vídeo {0} in folder {1}".format(nome, caminho))
+                elif arq:
+                    arq.write(frag)
+
+            if arq:
+                nVideos += 1
+                arq.close()
+
+            wx.MessageBox("{0} Video(s) sucessfully saved in folder {1}".format(nVideos, caminho), style=wx.OK)
+
+            self.SetStatusText("Done!!")
+        else:
+            wx.MessageBox("No image/disk loaded!!!!!!", "Warning", style=wx.OK)
+
+    def recupera_slack(self):
+        if not self.imagem_carregada:
+            wx.MessageBox("No image/disk loaded!!!!!!", "Warning", style=wx.OK)
+            return
+
+        if len(self.lista) > 0:
+            caminho = self.canonize_path("WFS0.4_Extractor_Slack")
+
+            nVideos = 0
+            for l in range(len(self.lista)):
+                pedacos, ultimo = self.guarda_pos(self.primeira[self.lista[l]])
+
+                desloc = self.inicio_videos + pedacos[-1] * self.fragmento + ultimo
+                self.disco.seek(desloc)
+                frag = self.disco.read(self.fragmento - ultimo)
+
+                startFrame = frag.find(h264Signature)
+                if startFrame != -1:
+                    nome = f"Slack-{pedacos[0]:06d}-{pedacos[-1]:06d}.h264"
+                    self.SetStatusText("Saving vídeo {0} in folder {1}".format(nome, caminho))
+                    arq = open(caminho+nome, "wb")
+                    arq.write(frag[startFrame:])
+                    arq.close()
+                    nVideos += 1
+                else:
+                    print ("Vídeo not found on slack "+str(pedacos[-1]))
+
+            wx.MessageBox("{0} Video(s) sucessfully saved in folder {1}".format(nVideos, caminho), style=wx.OK)
+
+            self.SetStatusText("Done!!")
+        else:
+            wx.MessageBox("Choose one or more videos", version, style=wx.OK | wx.ICON_INFORMATION)
 
     # função para montar a lista com os vídeos a serem baixados
     def monta_lista(self, event):
@@ -429,9 +532,9 @@ class DiskSelection(wx.Frame):
 
     def onSelect(self, event):
         self.Close()
-        print ("FIle:", self.combo.GetValue())
         self.Janela.carrega_imagem(self.combo.GetValue())
 
+h264Signature = b'\x00\x00\x01\xFC'
 if __name__ == '__main__':
     app = wx.App()
     main = Janela(None)

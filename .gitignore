@@ -1,4 +1,1 @@
-experiments
-old
-icons
-*.exe
+__pycache__/*
